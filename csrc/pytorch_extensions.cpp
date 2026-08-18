@@ -159,6 +159,11 @@ TORCH_LIBRARY_FRAGMENT(npu, m)
         "Tensor(a!) token_on_device, Tensor(b!) device_token_pos, "
         "int block_dim=0) -> ()");
 
+    m.def(
+        "sfa_state_merge(Tensor hit_output, Tensor hit_max, Tensor hit_sum, "
+        "Tensor miss_output, Tensor miss_max, Tensor miss_sum, "
+        "Tensor hit_counts, Tensor miss_counts, Tensor(a!) output) -> Tensor(a!)");
+
     m.def("shm_allocator_create_and_register(int size, int device_id, str name) -> (int, int)");
 
     m.def("shm_allocator_free_all(int device_id) -> ()");
@@ -235,6 +240,8 @@ TORCH_LIBRARY_IMPL(npu, PrivateUse1, m)
     m.impl("unidex_copy", TORCH_FN(sglang::npu_kernel::unidex_copy));
 
     m.impl("slot_map_lookup", TORCH_FN(sglang::npu_kernel::slot_map_lookup));
+
+    m.impl("sfa_state_merge", TORCH_FN(sglang::npu_kernel::sfa_state_merge));
 
     m.impl("causal_conv1d_update",
            [](const at::Tensor &x, const at::Tensor &weight, const at::Tensor &conv_state,

@@ -201,6 +201,24 @@ void slot_map_lookup(const at::Tensor &slot_map, const at::Tensor &req_indices,
                      int64_t block_dim);
 
 /**
+ * @brief Merge two sparse-flash-attention online-softmax states.
+ *
+ * Outputs use base-format BSND layout [B, S, H, D] with D a multiple of 16.
+ * Statistics use base-format [B, 1, S, H].
+ * A partition is empty for a batch item when its int32 count is not positive.
+ * The result is written to the caller-provided output tensor so its address is
+ * stable across NPUGraph capture and replay.
+ */
+at::Tensor &sfa_state_merge(const at::Tensor &hit_output,
+                            const at::Tensor &hit_max,
+                            const at::Tensor &hit_sum,
+                            const at::Tensor &miss_output,
+                            const at::Tensor &miss_max,
+                            const at::Tensor &miss_sum,
+                            const at::Tensor &hit_counts,
+                            const at::Tensor &miss_counts, at::Tensor &output);
+
+/**
  * @brief Create host shared memory and register it to the NPU device.
  *
  * Returns:

@@ -157,3 +157,35 @@ def slot_map_lookup(
         block_dim,
     )
     return token_on_device, device_token_pos
+
+
+def sfa_state_merge_inplace(
+    hit_output: torch.Tensor,
+    hit_max: torch.Tensor,
+    hit_sum: torch.Tensor,
+    miss_output: torch.Tensor,
+    miss_max: torch.Tensor,
+    miss_sum: torch.Tensor,
+    hit_counts: torch.Tensor,
+    miss_counts: torch.Tensor,
+    output: torch.Tensor,
+) -> torch.Tensor:
+    """Merge hit/miss SFA states into a fixed-address output tensor.
+
+    ``hit_output`` and ``miss_output`` use BSND layout ``[B, S, H, D]``.
+    The FP32 max/sum statistics use ``[B, 1, S, H]`` and counts use int32
+    ``[B]``. All tensors must use the base NPU ND format, and ``D`` must be a
+    multiple of 16. Non-positive counts mark an empty partition. The merge is
+    performed in FP32 and cast back to the output dtype.
+    """
+    return torch.ops.npu.sfa_state_merge(
+        hit_output,
+        hit_max,
+        hit_sum,
+        miss_output,
+        miss_max,
+        miss_sum,
+        hit_counts,
+        miss_counts,
+        output,
+    )
