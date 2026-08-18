@@ -135,7 +135,9 @@ private:
     __aicore__ inline void CopyHitInput(uint32_t gmOffset, uint32_t elements)
     {
         AscendC::LocalTensor<T> local = hitQueue.AllocTensor<T>();
-        AscendC::DataCopyExtParams copyParams{1, elements * sizeof(T), 0, 0, 0};
+        const uint32_t byteCount =
+            static_cast<uint32_t>(static_cast<uint64_t>(elements) * sizeof(T));
+        AscendC::DataCopyExtParams copyParams{1, byteCount, 0, 0, 0};
         AscendC::DataCopyPadExtParams<T> padParams{false, 0, 0, 0};
         AscendC::DataCopyPad(local, hitOutputGm[gmOffset], copyParams, padParams);
         hitQueue.EnQue(local);
@@ -144,7 +146,9 @@ private:
     __aicore__ inline void CopyMissInput(uint32_t gmOffset, uint32_t elements)
     {
         AscendC::LocalTensor<T> local = missQueue.AllocTensor<T>();
-        AscendC::DataCopyExtParams copyParams{1, elements * sizeof(T), 0, 0, 0};
+        const uint32_t byteCount =
+            static_cast<uint32_t>(static_cast<uint64_t>(elements) * sizeof(T));
+        AscendC::DataCopyExtParams copyParams{1, byteCount, 0, 0, 0};
         AscendC::DataCopyPadExtParams<T> padParams{false, 0, 0, 0};
         AscendC::DataCopyPad(local, missOutputGm[gmOffset], copyParams, padParams);
         missQueue.EnQue(local);
@@ -195,7 +199,9 @@ private:
         }
 
         AscendC::LocalTensor<T> readyOutput = outputQueue.DeQue<T>();
-        AscendC::DataCopyExtParams copyParams{1, elements * sizeof(T), 0, 0, 0};
+        const uint32_t byteCount =
+            static_cast<uint32_t>(static_cast<uint64_t>(elements) * sizeof(T));
+        AscendC::DataCopyExtParams copyParams{1, byteCount, 0, 0, 0};
         AscendC::DataCopyPad(outputGm[gmOffset], readyOutput, copyParams);
         outputQueue.FreeTensor(readyOutput);
     }
