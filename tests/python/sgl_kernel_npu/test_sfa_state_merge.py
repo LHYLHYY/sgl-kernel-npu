@@ -61,6 +61,12 @@ class TestSfaStateMerge(unittest.TestCase):
             tensor = torch_npu.npu_format_cast(tensor, NPU_FORMAT_ND)
         return tensor
 
+    def _to_npu_nchw_format(self, tensor):
+        tensor = tensor.to(self.device)
+        if tensor.dim() == 4:
+            tensor = torch_npu.npu_format_cast(tensor, 0)
+        return tensor
+
     def _make_case(self, dtype, seed):
         generator = torch.Generator().manual_seed(seed)
         shape = (4, 2, 16, 512)
@@ -118,6 +124,19 @@ class TestSfaStateMerge(unittest.TestCase):
         for dtype in (torch.float16, torch.bfloat16):
             with self.subTest(dtype=dtype):
                 self._run_eager_case(dtype)
+
+    def test_accepts_dense_nchw_format(self):
+        cpu_case = self._make_case(torch.bfloat16, seed=37)
+        expected = _reference_merge(*cpu_case)
+        nchw_case = tuple(self._to_npu_nchw_format(tensor) for tensor in cpu_case)
+        output = torch.empty_like(nchw_case[0])
+
+        sfa_state_merge_inplace(*nchw_case, output)
+        torch.npu.synchronize()
+
+        torch.testing.assert_close(
+            output.cpu().float(), expected.float(), rtol=2e-2, atol=2e-2
+        )
 
     def test_empty_partition_does_not_read_dummy_output(self):
         cpu_case = list(self._make_case(torch.bfloat16, seed=23))

@@ -34,8 +34,14 @@ constexpr uint64_t kUint32Max = std::numeric_limits<uint32_t>::max();
 void CheckNpuTensor(const at::Tensor &tensor, const char *name)
 {
     TORCH_CHECK(tensor.device().type() == at::DeviceType::PrivateUse1, name, " must be on an NPU device");
-    TORCH_CHECK(at_npu::native::get_npu_format(tensor) == ACL_FORMAT_ND, name,
-                " must use ACL_FORMAT_ND because sfa_state_merge consumes a raw contiguous BSND buffer");
+    // The raw kernel consumes the dense logical BSND/ND memory order.  Depending
+    // on torch_npu version and graph capture, a dense tensor may be tagged as
+    // either ACL_FORMAT_ND or ACL_FORMAT_NCHW even though both expose the same
+    // contiguous storage for these shapes.  Reject only genuinely non-dense
+    // formats; is_contiguous() is checked by the callers below.
+    const auto format = at_npu::native::get_npu_format(tensor);
+    TORCH_CHECK(format == ACL_FORMAT_ND || format == ACL_FORMAT_NCHW, name,
+                " must use a dense ACL_FORMAT_ND or ACL_FORMAT_NCHW layout for sfa_state_merge");
 }
 
 void CheckSameDevice(const at::Tensor &tensor, const at::Tensor &reference, const char *name)
