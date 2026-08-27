@@ -139,6 +139,138 @@ def unidex_copy_inplace(
     return dst
 
 
+def unidex_split_copy_inplace(
+    src: torch.Tensor,
+    dst_nope: torch.Tensor,
+    dst_rope: torch.Tensor,
+    src_index: torch.Tensor,
+    dst_index: torch.Tensor,
+    valid_mask: torch.Tensor,
+    src_address_ndims: int,
+    dst_address_ndims: int,
+    block_dim: int = 8,
+    src_ptr: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Copy indexed combined-KV rows directly into contiguous NoPE/RoPE rows."""
+
+    src_rows, src_block_bytes = _infer_rows_and_block_bytes(
+        src, src_address_ndims, "src"
+    )
+    dst_rows, nope_bytes = _infer_rows_and_block_bytes(
+        dst_nope, dst_address_ndims, "dst_nope"
+    )
+    rope_rows, rope_bytes = _infer_rows_and_block_bytes(
+        dst_rope, dst_address_ndims, "dst_rope"
+    )
+    if rope_rows != dst_rows:
+        raise ValueError(
+            f"dst_nope and dst_rope must have the same row count, got {dst_rows} and {rope_rows}"
+        )
+    if src_block_bytes != nope_bytes + rope_bytes:
+        raise ValueError(
+            "src row bytes must equal dst_nope + dst_rope row bytes, got "
+            f"{src_block_bytes}, {nope_bytes}, and {rope_bytes}"
+        )
+    if src.dtype != dst_nope.dtype or src.dtype != dst_rope.dtype:
+        raise ValueError("src, dst_nope, and dst_rope must have the same dtype")
+    if (
+        src_index.numel() != dst_index.numel()
+        or src_index.numel() != valid_mask.numel()
+    ):
+        raise ValueError(
+            "src_index, dst_index, and valid_mask must have the same length"
+        )
+
+    torch.ops.npu.unidex_split_copy(
+        src,
+        dst_nope,
+        dst_rope,
+        src_index,
+        dst_index,
+        valid_mask,
+        src_rows,
+        dst_rows,
+        nope_bytes,
+        rope_bytes,
+        src_index.numel(),
+        block_dim,
+        src_ptr,
+    )
+    return dst_nope, dst_rope
+
+
+def unidex_split_copy_promote_inplace(
+    src: torch.Tensor,
+    dst_nope: torch.Tensor,
+    dst_rope: torch.Tensor,
+    hot_cache: torch.Tensor,
+    src_index: torch.Tensor,
+    dst_index: torch.Tensor,
+    hot_dst_index: torch.Tensor,
+    valid_mask: torch.Tensor,
+    src_address_ndims: int,
+    dst_address_ndims: int,
+    hot_address_ndims: int,
+    block_dim: int = 8,
+    src_ptr: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Copy Host misses into SFA buffers and promote the same rows into hot cache."""
+
+    src_rows, src_block_bytes = _infer_rows_and_block_bytes(
+        src, src_address_ndims, "src"
+    )
+    dst_rows, nope_bytes = _infer_rows_and_block_bytes(
+        dst_nope, dst_address_ndims, "dst_nope"
+    )
+    rope_rows, rope_bytes = _infer_rows_and_block_bytes(
+        dst_rope, dst_address_ndims, "dst_rope"
+    )
+    hot_rows, hot_block_bytes = _infer_rows_and_block_bytes(
+        hot_cache, hot_address_ndims, "hot_cache"
+    )
+    if rope_rows != dst_rows:
+        raise ValueError(
+            f"dst_nope and dst_rope must have the same row count, got {dst_rows} and {rope_rows}"
+        )
+    if src_block_bytes != nope_bytes + rope_bytes or hot_block_bytes != src_block_bytes:
+        raise ValueError(
+            "src/hot row bytes must equal dst_nope + dst_rope row bytes, got "
+            f"src={src_block_bytes}, hot={hot_block_bytes}, "
+            f"nope={nope_bytes}, rope={rope_bytes}"
+        )
+    if not (src.dtype == dst_nope.dtype == dst_rope.dtype == hot_cache.dtype):
+        raise ValueError(
+            "src, SFA destinations, and hot_cache must have the same dtype"
+        )
+    if not (
+        src_index.numel()
+        == dst_index.numel()
+        == hot_dst_index.numel()
+        == valid_mask.numel()
+    ):
+        raise ValueError("all copy descriptors must have the same length")
+
+    torch.ops.npu.unidex_split_copy_promote(
+        src,
+        dst_nope,
+        dst_rope,
+        hot_cache,
+        src_index,
+        dst_index,
+        hot_dst_index,
+        valid_mask,
+        src_rows,
+        dst_rows,
+        hot_rows,
+        nope_bytes,
+        rope_bytes,
+        src_index.numel(),
+        block_dim,
+        src_ptr,
+    )
+    return dst_nope, dst_rope, hot_cache
+
+
 def slot_map_lookup(
     slot_map: torch.Tensor,
     req_indices: torch.Tensor,

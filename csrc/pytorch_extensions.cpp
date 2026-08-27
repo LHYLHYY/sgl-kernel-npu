@@ -155,6 +155,18 @@ TORCH_LIBRARY_FRAGMENT(npu, m)
         "int? src_ptr=None, int? dst_ptr=None) -> ()");
 
     m.def(
+        "unidex_split_copy(Tensor src, Tensor(a!) dst_nope, Tensor(b!) dst_rope, "
+        "Tensor src_index, Tensor dst_index, Tensor valid_mask, int src_rows, "
+        "int dst_rows, int nope_bytes, int rope_bytes, int max_copy, "
+        "int block_dim=8, int? src_ptr=None) -> ()");
+
+    m.def(
+        "unidex_split_copy_promote(Tensor src, Tensor(a!) dst_nope, Tensor(b!) dst_rope, "
+        "Tensor(c!) hot_cache, Tensor src_index, Tensor dst_index, Tensor hot_dst_index, "
+        "Tensor valid_mask, int src_rows, int dst_rows, int hot_rows, int nope_bytes, "
+        "int rope_bytes, int max_copy, int block_dim=8, int? src_ptr=None) -> ()");
+
+    m.def(
         "slot_map_lookup(Tensor slot_map, Tensor req_indices, Tensor topk_indices, "
         "Tensor(a!) token_on_device, Tensor(b!) device_token_pos, "
         "int block_dim=0) -> ()");
@@ -238,6 +250,10 @@ TORCH_LIBRARY_IMPL(npu, PrivateUse1, m)
     });
 
     m.impl("unidex_copy", TORCH_FN(sglang::npu_kernel::unidex_copy));
+
+    m.impl("unidex_split_copy", TORCH_FN(sglang::npu_kernel::unidex_split_copy));
+
+    m.impl("unidex_split_copy_promote", TORCH_FN(sglang::npu_kernel::unidex_split_copy_promote));
 
     m.impl("slot_map_lookup", TORCH_FN(sglang::npu_kernel::slot_map_lookup));
 

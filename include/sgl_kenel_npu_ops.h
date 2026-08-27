@@ -183,6 +183,22 @@ void unidex_copy(const at::Tensor &src, at::Tensor &dst,
                  int64_t block_dim, c10::optional<int64_t> src_ptr,
                  c10::optional<int64_t> dst_ptr);
 
+void unidex_split_copy(const at::Tensor &src, at::Tensor &dst_nope,
+                       at::Tensor &dst_rope, const at::Tensor &src_index,
+                       const at::Tensor &dst_index,
+                       const at::Tensor &valid_mask, int64_t src_rows,
+                       int64_t dst_rows, int64_t nope_bytes,
+                       int64_t rope_bytes, int64_t max_copy,
+                       int64_t block_dim, c10::optional<int64_t> src_ptr);
+
+void unidex_split_copy_promote(
+    const at::Tensor &src, at::Tensor &dst_nope, at::Tensor &dst_rope,
+    at::Tensor &hot_cache, const at::Tensor &src_index,
+    const at::Tensor &dst_index, const at::Tensor &hot_dst_index,
+    const at::Tensor &valid_mask, int64_t src_rows, int64_t dst_rows,
+    int64_t hot_rows, int64_t nope_bytes, int64_t rope_bytes,
+    int64_t max_copy, int64_t block_dim, c10::optional<int64_t> src_ptr);
+
 /**
  * @brief Look up slot_map[req_indices[b], topk_indices[b, k]] for each query.
  *
