@@ -145,10 +145,14 @@ HOST_API void unidex_split_copy(const at::Tensor &src, at::Tensor &dst_nope, at:
     RecordCommon(src, dst_nope, dst_rope, src_index, dst_index, valid_mask, src_ptr.has_value(), npuStream);
     void *srcAddr = src_ptr.has_value() ? reinterpret_cast<void *>(static_cast<uintptr_t>(*src_ptr))
                                        : const_cast<void *>(src.data_ptr());
-    EXEC_KERNEL_CMD(unidex_split_copy, static_cast<uint32_t>(block_dim), srcAddr, dst_nope, dst_rope, src_index,
-                    dst_index, valid_mask, static_cast<uint32_t>(src_rows), static_cast<uint32_t>(dst_rows),
-                    static_cast<uint32_t>(nope_bytes), static_cast<uint32_t>(rope_bytes),
-                    static_cast<uint32_t>(max_copy));
+    uint32_t srcRowsU32 = static_cast<uint32_t>(src_rows);
+    uint32_t dstRowsU32 = static_cast<uint32_t>(dst_rows);
+    uint32_t nopeBytesU32 = static_cast<uint32_t>(nope_bytes);
+    uint32_t ropeBytesU32 = static_cast<uint32_t>(rope_bytes);
+    uint32_t maxCopyU32 = static_cast<uint32_t>(max_copy);
+    uint32_t blockDimU32 = static_cast<uint32_t>(block_dim);
+    EXEC_KERNEL_CMD(unidex_split_copy, blockDimU32, srcAddr, dst_nope, dst_rope, src_index, dst_index, valid_mask,
+                    srcRowsU32, dstRowsU32, nopeBytesU32, ropeBytesU32, maxCopyU32);
 }
 
 HOST_API void unidex_split_copy_promote(const at::Tensor &src, at::Tensor &dst_nope, at::Tensor &dst_rope,
@@ -188,11 +192,16 @@ HOST_API void unidex_split_copy_promote(const at::Tensor &src, at::Tensor &dst_n
     hot_dst_index.record_stream(npuStream);
     void *srcAddr = src_ptr.has_value() ? reinterpret_cast<void *>(static_cast<uintptr_t>(*src_ptr))
                                        : const_cast<void *>(src.data_ptr());
-    EXEC_KERNEL_CMD(unidex_split_copy_promote, static_cast<uint32_t>(block_dim), srcAddr, dst_nope, dst_rope,
-                    hot_cache, src_index, dst_index, hot_dst_index, valid_mask, static_cast<uint32_t>(src_rows),
-                    static_cast<uint32_t>(dst_rows), static_cast<uint32_t>(hot_rows),
-                    static_cast<uint32_t>(nope_bytes), static_cast<uint32_t>(rope_bytes),
-                    static_cast<uint32_t>(max_copy));
+    uint32_t srcRowsU32 = static_cast<uint32_t>(src_rows);
+    uint32_t dstRowsU32 = static_cast<uint32_t>(dst_rows);
+    uint32_t hotRowsU32 = static_cast<uint32_t>(hot_rows);
+    uint32_t nopeBytesU32 = static_cast<uint32_t>(nope_bytes);
+    uint32_t ropeBytesU32 = static_cast<uint32_t>(rope_bytes);
+    uint32_t maxCopyU32 = static_cast<uint32_t>(max_copy);
+    uint32_t blockDimU32 = static_cast<uint32_t>(block_dim);
+    EXEC_KERNEL_CMD(unidex_split_copy_promote, blockDimU32, srcAddr, dst_nope, dst_rope, hot_cache, src_index,
+                    dst_index, hot_dst_index, valid_mask, srcRowsU32, dstRowsU32, hotRowsU32, nopeBytesU32,
+                    ropeBytesU32, maxCopyU32);
 }
 
 }  // namespace npu_kernel
