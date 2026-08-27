@@ -12,6 +12,7 @@ adapter.
 | `shm_allocator` | Allocates host-backed storage and registers it with the NPU, exposing a stable device-visible address. |
 | `unidex_copy` | Performs masked indexed row copies for D2D, H2D, and D2H KV movement. |
 | `slot_map_lookup` | Resolves sparse top-k logical KV positions against the device-resident slot map. |
+| `sparse_kv_partition_plan` | Fuses hit/miss partitioning, sparse-index packing, free-slot assignment, and copy/publish descriptor generation. |
 | `sfa_state_merge` | Fuses two SFA output/max/sum states with empty-partition handling into a fixed-address output. |
 
 The intended data path is:
@@ -20,14 +21,17 @@ The intended data path is:
 top-k indices
     │
     ▼
-slot_map_lookup ── hits ───────────────┐
-    │                                  │
-    └── misses ── registered host KV ──┤
-                                       ▼
-                                  unidex_copy
-                                       │
-                                       ▼
-                              selected top-k KV buffer
+slot_map_lookup
+    │
+    ▼
+sparse_kv_partition_plan
+    ├── hit descriptors ── device hot KV ──┐
+    └── miss descriptors ─ registered host ─┤
+                                            ▼
+                                     split copy kernels
+                                            │
+                                            ▼
+                                  shared sparse SFA buffers
 ```
 
 ## Python API
@@ -38,6 +42,7 @@ The canonical Python API is:
 from sgl_kernel_npu.sparsity_driven_kv_offload import (
     create_shm_tensor,
     free_shm,
+    sparse_kv_partition_plan,
     sfa_state_merge_inplace,
     slot_map_lookup,
     unidex_copy_inplace,

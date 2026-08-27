@@ -172,6 +172,17 @@ TORCH_LIBRARY_FRAGMENT(npu, m)
         "int block_dim=0) -> ()");
 
     m.def(
+        "sparse_kv_partition_plan(Tensor token_on_device, Tensor device_token_pos, "
+        "Tensor topk_indices, Tensor device_cache_row_indices, Tensor slot_map_row_indices, "
+        "Tensor valid_topk_mask, Tensor(a!) hit_sparse_indices, "
+        "Tensor(b!) miss_sparse_indices, Tensor(c!) hit_counts, Tensor(d!) miss_counts, "
+        "Tensor(e!) hit_src_indices, Tensor(f!) miss_src_indices, "
+        "Tensor(g!) miss_hot_dst_indices, Tensor(h!) hit_valid_mask, "
+        "Tensor(i!) miss_valid_mask, Tensor(j!) slot_map_flat_indices, "
+        "Tensor(k!) slot_map_slot_values, int max_context_len, int slot_map_width, "
+        "int block_dim=0) -> ()");
+
+    m.def(
         "sfa_state_merge(Tensor hit_output, Tensor hit_max, Tensor hit_sum, "
         "Tensor miss_output, Tensor miss_max, Tensor miss_sum, "
         "Tensor hit_counts, Tensor miss_counts, Tensor(a!) output) -> Tensor(a!)");
@@ -256,6 +267,8 @@ TORCH_LIBRARY_IMPL(npu, PrivateUse1, m)
     m.impl("unidex_split_copy_promote", TORCH_FN(sglang::npu_kernel::unidex_split_copy_promote));
 
     m.impl("slot_map_lookup", TORCH_FN(sglang::npu_kernel::slot_map_lookup));
+
+    m.impl("sparse_kv_partition_plan", TORCH_FN(sglang::npu_kernel::sparse_kv_partition_plan));
 
     m.impl("sfa_state_merge", TORCH_FN(sglang::npu_kernel::sfa_state_merge));
 

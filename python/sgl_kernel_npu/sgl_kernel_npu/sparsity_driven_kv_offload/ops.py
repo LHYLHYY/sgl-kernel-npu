@@ -28,10 +28,7 @@ def _ctype_for_dtype(dtype: torch.dtype):
 
 
 def create_shm_tensor(
-    shape: Sequence[int],
-    dtype: torch.dtype,
-    device_id: int = 0,
-    name: str = "",
+    shape: Sequence[int], dtype: torch.dtype, device_id: int = 0, name: str = "",
 ) -> Tuple[torch.Tensor, int, int]:
     """Create host shared memory and register it to an NPU device.
 
@@ -289,6 +286,120 @@ def slot_map_lookup(
         block_dim,
     )
     return token_on_device, device_token_pos
+
+
+def sparse_kv_partition_plan_inplace(
+    token_on_device: torch.Tensor,
+    device_token_pos: torch.Tensor,
+    topk_indices: torch.Tensor,
+    device_cache_row_indices: torch.Tensor,
+    slot_map_row_indices: torch.Tensor,
+    valid_topk_mask: torch.Tensor,
+    hit_sparse_indices: torch.Tensor,
+    miss_sparse_indices: torch.Tensor,
+    hit_counts: torch.Tensor,
+    miss_counts: torch.Tensor,
+    hit_src_indices: torch.Tensor,
+    miss_src_indices: torch.Tensor,
+    miss_hot_dst_indices: torch.Tensor,
+    hit_valid_mask: torch.Tensor,
+    miss_valid_mask: torch.Tensor,
+    slot_map_flat_indices: torch.Tensor,
+    slot_map_slot_values: torch.Tensor,
+    max_context_len: int,
+    slot_map_width: int,
+    block_dim: int = 0,
+):
+    """Build fixed-shape sparse KV communication descriptors in one NPU op.
+
+    This consumes ``slot_map_lookup`` outputs. It preserves the physical slots
+    of hits, assigns misses to free hot-cache slots, creates compact SFA index
+    lists, and writes all descriptors needed by hit D2D, miss H2D+promotion,
+    and the following slot-map publication. All output tensors are caller-owned
+    so their addresses remain stable across NPUGraph replay.
+    """
+    torch.ops.npu.sparse_kv_partition_plan(
+        token_on_device,
+        device_token_pos,
+        topk_indices,
+        device_cache_row_indices,
+        slot_map_row_indices,
+        valid_topk_mask,
+        hit_sparse_indices,
+        miss_sparse_indices,
+        hit_counts,
+        miss_counts,
+        hit_src_indices,
+        miss_src_indices,
+        miss_hot_dst_indices,
+        hit_valid_mask,
+        miss_valid_mask,
+        slot_map_flat_indices,
+        slot_map_slot_values,
+        max_context_len,
+        slot_map_width,
+        block_dim,
+    )
+    return (
+        hit_sparse_indices,
+        miss_sparse_indices,
+        hit_counts,
+        miss_counts,
+        hit_src_indices,
+        miss_src_indices,
+        miss_hot_dst_indices,
+        hit_valid_mask,
+        miss_valid_mask,
+        slot_map_flat_indices,
+        slot_map_slot_values,
+    )
+
+
+def sparse_kv_partition_plan(
+    token_on_device: torch.Tensor,
+    device_token_pos: torch.Tensor,
+    topk_indices: torch.Tensor,
+    device_cache_row_indices: torch.Tensor,
+    slot_map_row_indices: torch.Tensor,
+    valid_topk_mask: torch.Tensor,
+    max_context_len: int,
+    slot_map_width: int,
+    block_dim: int = 0,
+):
+    """Allocate and return the outputs of :func:`sparse_kv_partition_plan_inplace`."""
+    if token_on_device.dim() != 2:
+        raise ValueError(
+            "token_on_device must have shape [B, K], got "
+            f"{tuple(token_on_device.shape)}"
+        )
+    batch_size, topk = token_on_device.shape
+    plan_size = batch_size * topk
+    options = dict(device=token_on_device.device)
+    outputs = (
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+        torch.empty((batch_size,), dtype=torch.int32, **options),
+        torch.empty((batch_size,), dtype=torch.int32, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.bool, **options),
+        torch.empty((plan_size,), dtype=torch.bool, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+    )
+    return sparse_kv_partition_plan_inplace(
+        token_on_device,
+        device_token_pos,
+        topk_indices,
+        device_cache_row_indices,
+        slot_map_row_indices,
+        valid_topk_mask,
+        *outputs,
+        max_context_len,
+        slot_map_width,
+        block_dim,
+    )
 
 
 def sfa_state_merge_inplace(

@@ -217,6 +217,26 @@ void slot_map_lookup(const at::Tensor &slot_map, const at::Tensor &req_indices,
                      int64_t block_dim);
 
 /**
+ * @brief Build all fixed-shape hit/miss copy and SFA descriptors after lookup.
+ *
+ * The planner preserves resident hit slots, assigns misses to their complement,
+ * compacts only the SFA index lists, and emits the descriptors used by the two
+ * indexed copy kernels and the subsequent slot-map publication.
+ */
+void sparse_kv_partition_plan(
+    const at::Tensor &token_on_device, const at::Tensor &device_token_pos,
+    const at::Tensor &topk_indices,
+    const at::Tensor &device_cache_row_indices,
+    const at::Tensor &slot_map_row_indices,
+    const at::Tensor &valid_topk_mask, at::Tensor &hit_sparse_indices,
+    at::Tensor &miss_sparse_indices, at::Tensor &hit_counts,
+    at::Tensor &miss_counts, at::Tensor &hit_src_indices,
+    at::Tensor &miss_src_indices, at::Tensor &miss_hot_dst_indices,
+    at::Tensor &hit_valid_mask, at::Tensor &miss_valid_mask,
+    at::Tensor &slot_map_flat_indices, at::Tensor &slot_map_slot_values,
+    int64_t max_context_len, int64_t slot_map_width, int64_t block_dim);
+
+/**
  * @brief Merge two sparse-flash-attention online-softmax states.
  *
  * Outputs use base-format BSND layout [B, S, H, D] with D a multiple of 16.
