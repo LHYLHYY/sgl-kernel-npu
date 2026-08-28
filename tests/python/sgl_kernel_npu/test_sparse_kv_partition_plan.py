@@ -189,12 +189,20 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
 
     def _empty_parallel_workspaces(self, batch_size, device="npu"):
         tile_shape = (batch_size, TOPK // 64)
+        bitmap_words = TOPK // 32
         return (
             torch.empty(tile_shape, dtype=torch.int32, device=device),
             torch.empty(tile_shape, dtype=torch.int32, device=device),
             torch.empty(tile_shape, dtype=torch.int32, device=device),
             torch.empty(tile_shape, dtype=torch.int32, device=device),
             torch.empty((batch_size, TOPK), dtype=torch.int32, device=device),
+            torch.empty(
+                (batch_size, TOPK // 64, bitmap_words),
+                dtype=torch.int32,
+                device=device,
+            ),
+            torch.empty((batch_size, bitmap_words), dtype=torch.int32, device=device),
+            torch.empty((batch_size, bitmap_words), dtype=torch.int32, device=device),
         )
 
     def test_matches_reference_and_preserves_hit_slots(self):
@@ -263,6 +271,82 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
         )
         torch.npu.synchronize()
         self._assert_plan_equal(actual, expected, "parallel cross-tile planner")
+
+    def test_parallel_workspace_bitmaps_and_tri_state(self):
+        inputs = self._make_inputs()
+        batch_size = inputs[0].size(0)
+        outputs = self._empty_outputs(batch_size)
+        workspaces = self._empty_parallel_workspaces(batch_size)
+
+        sparse_kv_partition_plan_parallel_inplace(
+            *inputs, *outputs, *workspaces, CONTEXT, SLOT_MAP_WIDTH,
+        )
+        torch.npu.synchronize()
+
+        token_on_device, device_pos, _, _, _, valid = (
+            tensor.cpu() for tensor in inputs
+        )
+        hit = valid & (token_on_device != 0) & (device_pos >= 0) & (device_pos < TOPK)
+        miss = valid & ~hit
+        expected_selected = torch.full((batch_size, TOPK), -1, dtype=torch.int32)
+        expected_selected[miss] = -2
+        expected_selected[hit] = device_pos[hit]
+        torch.testing.assert_close(workspaces[4].cpu(), expected_selected)
+
+        bitmap_words = TOPK // 32
+        expected_tile_bitmaps = torch.zeros(
+            (batch_size, TOPK // 64, bitmap_words), dtype=torch.int64
+        )
+        for batch in range(batch_size):
+            for position in torch.nonzero(hit[batch], as_tuple=False).flatten():
+                position = int(position)
+                slot = int(device_pos[batch, position])
+                expected_tile_bitmaps[batch, position // 64, slot // 32] |= 1 << (
+                    slot % 32
+                )
+        expected_tile_bitmaps = expected_tile_bitmaps.to(torch.int32)
+        torch.testing.assert_close(workspaces[5].cpu(), expected_tile_bitmaps)
+
+        expected_occupied = torch.zeros((batch_size, bitmap_words), dtype=torch.int32)
+        for tile in range(TOPK // 64):
+            expected_occupied.bitwise_or_(expected_tile_bitmaps[:, tile])
+        torch.testing.assert_close(workspaces[6].cpu(), expected_occupied)
+
+        expected_prefix = torch.zeros_like(expected_occupied)
+        for batch in range(batch_size):
+            free_count = 0
+            for word in range(bitmap_words):
+                expected_prefix[batch, word] = free_count
+                occupied_word = int(expected_occupied[batch, word]) & 0xFFFFFFFF
+                free_count += 32 - occupied_word.bit_count()
+        torch.testing.assert_close(workspaces[7].cpu(), expected_prefix)
+
+    def test_parallel_full_hit_and_full_miss_rows(self):
+        positions = torch.arange(TOPK, dtype=torch.int32)
+        topk = positions.unsqueeze(0).expand(2, TOPK).clone()
+        valid = torch.ones((2, TOPK), dtype=torch.bool)
+        token_on_device = torch.zeros((2, TOPK), dtype=torch.int32)
+        token_on_device[0].fill_(1)
+        device_pos = torch.full((2, TOPK), -1, dtype=torch.int32)
+        device_pos[0] = positions.mul(37).remainder(TOPK)
+        inputs = tuple(
+            tensor.to("npu")
+            for tensor in (
+                token_on_device,
+                device_pos,
+                topk,
+                torch.tensor([3, 1], dtype=torch.int64),
+                torch.tensor([3, 1], dtype=torch.int64),
+                valid,
+            )
+        )
+
+        expected = reference_plan(*inputs)
+        actual = sparse_kv_partition_plan_parallel(
+            *inputs, max_context_len=CONTEXT, slot_map_width=SLOT_MAP_WIDTH,
+        )
+        torch.npu.synchronize()
+        self._assert_plan_equal(actual, expected, "parallel full hit/miss rows")
 
     def test_rejects_non_fixed_topk(self):
         batch = 1

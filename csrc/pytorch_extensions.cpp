@@ -193,6 +193,8 @@ TORCH_LIBRARY_FRAGMENT(npu, m)
         "Tensor(k!) slot_map_slot_values, Tensor(l!) tile_hit_counts, "
         "Tensor(m!) tile_miss_counts, Tensor(n!) tile_hit_offsets, "
         "Tensor(o!) tile_miss_offsets, Tensor(p!) selected_slots, "
+        "Tensor(q!) tile_occupied_bitmaps, Tensor(r!) occupied_bitmaps, "
+        "Tensor(s!) free_slot_prefixes, "
         "int max_context_len, int slot_map_width, int block_dim=0) -> ()");
 
     m.def(

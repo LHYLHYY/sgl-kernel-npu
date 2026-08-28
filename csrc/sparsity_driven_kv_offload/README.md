@@ -13,7 +13,7 @@ adapter.
 | `unidex_copy` | Performs masked indexed row copies for D2D, H2D, and D2H KV movement. |
 | `slot_map_lookup` | Resolves sparse top-k logical KV positions against the device-resident slot map. |
 | `sparse_kv_partition_plan` | Fuses hit/miss partitioning, sparse-index packing, free-slot assignment, and copy/publish descriptor generation. |
-| `sparse_kv_partition_plan_parallel` | Uses classify, request-scan, and stable-scatter kernels to parallelize 64-entry Top-K tiles while preserving the original planner outputs. |
+| `sparse_kv_partition_plan_parallel` | Uses classify, bitmap-reduce scan, and stable-scatter kernels. Classification emits tile-local resident-slot bitmaps; scan only reduces bitmaps and tile offsets; scatter assigns misses to free slots in parallel while preserving the original planner outputs. |
 | `sfa_state_merge` | Fuses two SFA output/max/sum states with empty-partition handling into a fixed-address output. |
 
 The intended data path is:

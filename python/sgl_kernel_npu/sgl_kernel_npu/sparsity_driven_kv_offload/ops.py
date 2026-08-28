@@ -425,6 +425,9 @@ def sparse_kv_partition_plan_parallel_inplace(
     tile_hit_offsets: torch.Tensor,
     tile_miss_offsets: torch.Tensor,
     selected_slots: torch.Tensor,
+    tile_occupied_bitmaps: torch.Tensor,
+    occupied_bitmaps: torch.Tensor,
+    free_slot_prefixes: torch.Tensor,
     max_context_len: int,
     slot_map_width: int,
     block_dim: int = 0,
@@ -432,10 +435,10 @@ def sparse_kv_partition_plan_parallel_inplace(
     """Run the fixed-address three-kernel parallel partition planner.
 
     Classification and stable scatter use 64-entry tiles across all AIVs. A
-    small request-level scan computes the 32 tile offsets and assigns misses to
-    the complement of resident hit slots. The public outputs are identical to
-    :func:`sparse_kv_partition_plan_inplace`; the additional tensors are graph-
-    stable workspaces owned by the caller.
+    small request-level scan computes tile offsets and reduces resident-slot
+    bitmaps; stable scatter assigns misses to free slots in parallel. The public
+    outputs are identical to :func:`sparse_kv_partition_plan_inplace`; the
+    additional tensors are graph-stable workspaces owned by the caller.
     """
     torch.ops.npu.sparse_kv_partition_plan_parallel(
         token_on_device,
@@ -460,6 +463,9 @@ def sparse_kv_partition_plan_parallel_inplace(
         tile_hit_offsets,
         tile_miss_offsets,
         selected_slots,
+        tile_occupied_bitmaps,
+        occupied_bitmaps,
+        free_slot_prefixes,
         max_context_len,
         slot_map_width,
         block_dim,
@@ -521,6 +527,11 @@ def sparse_kv_partition_plan_parallel(
         torch.empty(tile_shape, dtype=torch.int32, **options),
         torch.empty(tile_shape, dtype=torch.int32, **options),
         torch.empty((batch_size, topk), dtype=torch.int32, **options),
+        torch.empty(
+            (batch_size, topk // 64, topk // 32), dtype=torch.int32, **options,
+        ),
+        torch.empty((batch_size, topk // 32), dtype=torch.int32, **options),
+        torch.empty((batch_size, topk // 32), dtype=torch.int32, **options),
     )
     return sparse_kv_partition_plan_parallel_inplace(
         token_on_device,

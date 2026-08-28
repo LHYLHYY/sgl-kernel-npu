@@ -239,8 +239,8 @@ void sparse_kv_partition_plan(
 /**
  * @brief Three-stage tile-parallel variant of sparse_kv_partition_plan.
  *
- * The four [B, 32] tile tensors and selected_slots [B, K] are caller-owned
- * fixed-address workspaces so the three device kernels are NPUGraph safe.
+ * Tile counters, tri-state selections, and resident-slot bitmap workspaces are
+ * caller-owned and fixed-address so all three device kernels are NPUGraph safe.
  */
 void sparse_kv_partition_plan_parallel(
     const at::Tensor &token_on_device, const at::Tensor &device_token_pos,
@@ -255,7 +255,9 @@ void sparse_kv_partition_plan_parallel(
     at::Tensor &slot_map_flat_indices, at::Tensor &slot_map_slot_values,
     at::Tensor &tile_hit_counts, at::Tensor &tile_miss_counts,
     at::Tensor &tile_hit_offsets, at::Tensor &tile_miss_offsets,
-    at::Tensor &selected_slots, int64_t max_context_len,
+    at::Tensor &selected_slots, at::Tensor &tile_occupied_bitmaps,
+    at::Tensor &occupied_bitmaps, at::Tensor &free_slot_prefixes,
+    int64_t max_context_len,
     int64_t slot_map_width, int64_t block_dim);
 
 /**

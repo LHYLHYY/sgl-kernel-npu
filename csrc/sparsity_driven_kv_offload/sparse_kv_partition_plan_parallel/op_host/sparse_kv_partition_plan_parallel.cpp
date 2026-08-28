@@ -63,7 +63,9 @@ HOST_API void sparse_kv_partition_plan_parallel(
     at::Tensor &slot_map_flat_indices, at::Tensor &slot_map_slot_values,
     at::Tensor &tile_hit_counts, at::Tensor &tile_miss_counts,
     at::Tensor &tile_hit_offsets, at::Tensor &tile_miss_offsets,
-    at::Tensor &selected_slots, int64_t max_context_len,
+    at::Tensor &selected_slots, at::Tensor &tile_occupied_bitmaps,
+    at::Tensor &occupied_bitmaps, at::Tensor &free_slot_prefixes,
+    int64_t max_context_len,
     int64_t slot_map_width, int64_t block_dim)
 {
     CheckNpuTensor(token_on_device, "token_on_device");
@@ -134,6 +136,13 @@ HOST_API void sparse_kv_partition_plan_parallel(
                 tileElements);
     CheckTensor(selected_slots, token_on_device, "selected_slots", at::kInt,
                 planElements);
+    CheckTensor(tile_occupied_bitmaps, token_on_device,
+                "tile_occupied_bitmaps", at::kInt,
+                planElements);
+    CheckTensor(occupied_bitmaps, token_on_device, "occupied_bitmaps",
+                at::kInt, batchSize64 * 64);
+    CheckTensor(free_slot_prefixes, token_on_device, "free_slot_prefixes",
+                at::kInt, batchSize64 * 64);
 
     auto platform = platform_ascendc::PlatformAscendCManager::GetInstance();
     const uint32_t maxAiv = static_cast<uint32_t>(platform->GetCoreNumAiv());
@@ -174,6 +183,9 @@ HOST_API void sparse_kv_partition_plan_parallel(
     tile_hit_offsets.record_stream(stream);
     tile_miss_offsets.record_stream(stream);
     selected_slots.record_stream(stream);
+    tile_occupied_bitmaps.record_stream(stream);
+    occupied_bitmaps.record_stream(stream);
+    free_slot_prefixes.record_stream(stream);
 
     const uint32_t topk = static_cast<uint32_t>(topk64);
     const uint32_t maxContextLen = static_cast<uint32_t>(max_context_len);
@@ -183,21 +195,23 @@ HOST_API void sparse_kv_partition_plan_parallel(
         device_token_pos, topk_indices, device_cache_row_indices,
         slot_map_row_indices, valid_topk_mask, hit_sparse_indices,
         miss_sparse_indices, hit_src_indices, miss_src_indices,
-        miss_hot_dst_indices, hit_valid_mask, miss_valid_mask,
-        slot_map_flat_indices, slot_map_slot_values, tile_hit_counts,
-        tile_miss_counts, selected_slots, batchSize, topk, maxContextLen,
+        hit_valid_mask, miss_valid_mask, slot_map_flat_indices,
+        tile_hit_counts, tile_miss_counts, selected_slots,
+        tile_occupied_bitmaps, batchSize, topk, maxContextLen,
         slotMapWidth);
     EXEC_KERNEL_CMD(
-        sparse_kv_partition_scan, scanBlockDim, device_cache_row_indices,
-        hit_sparse_indices, miss_sparse_indices, hit_counts, miss_counts,
-        miss_hot_dst_indices, hit_valid_mask, miss_valid_mask,
-        slot_map_slot_values, tile_hit_counts, tile_miss_counts,
-        tile_hit_offsets, tile_miss_offsets, selected_slots, batchSize, topk);
+        sparse_kv_partition_scan, scanBlockDim, hit_sparse_indices,
+        miss_sparse_indices, hit_counts, miss_counts, tile_hit_counts,
+        tile_miss_counts, tile_hit_offsets, tile_miss_offsets,
+        tile_occupied_bitmaps, occupied_bitmaps, free_slot_prefixes,
+        batchSize, topk);
     EXEC_KERNEL_CMD(
-        sparse_kv_partition_scatter, tileBlockDim, hit_valid_mask,
-        miss_valid_mask, tile_hit_counts, tile_miss_counts, tile_hit_offsets,
-        tile_miss_offsets, hit_sparse_indices, miss_sparse_indices, batchSize,
-        topk);
+        sparse_kv_partition_scatter, tileBlockDim,
+        device_cache_row_indices, tile_hit_counts, tile_miss_counts,
+        tile_hit_offsets,
+        tile_miss_offsets, selected_slots, occupied_bitmaps,
+        free_slot_prefixes, hit_sparse_indices, miss_sparse_indices,
+        miss_hot_dst_indices, slot_map_slot_values, batchSize, topk);
 }
 
 }  // namespace npu_kernel
