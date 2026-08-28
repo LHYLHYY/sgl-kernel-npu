@@ -33,6 +33,7 @@ FILE(GLOB OP_SRCS
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/unidex_split_copy/op_host/unidex_split_copy.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/slot_map_lookup/op_host/slot_map_lookup.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan/op_host/sparse_kv_partition_plan.cpp
+    ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan_parallel/op_host/sparse_kv_partition_plan_parallel.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sfa_state_merge/op_host/sfa_state_merge.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/shm_allocator/shm_allocator.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/shm_allocator/shm_allocator_op.cpp
@@ -75,6 +76,9 @@ set(NO_WORKSPACE_KERNEL_SRCS
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/unidex_split_copy/op_kernel/unidex_split_copy_kernel.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/slot_map_lookup/op_kernel/slot_map_lookup_kernel.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan/op_kernel/sparse_kv_partition_plan_kernel.cpp
+    ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan_parallel/op_kernel/sparse_kv_partition_classify_kernel.cpp
+    ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan_parallel/op_kernel/sparse_kv_partition_scan_kernel.cpp
+    ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sparse_kv_partition_plan_parallel/op_kernel/sparse_kv_partition_scatter_kernel.cpp
     ${PROJECT_OP_SRC_BASE}/sparsity_driven_kv_offload/sfa_state_merge/op_kernel/sfa_state_merge_kernel.cpp
 )
 

@@ -402,6 +402,141 @@ def sparse_kv_partition_plan(
     )
 
 
+def sparse_kv_partition_plan_parallel_inplace(
+    token_on_device: torch.Tensor,
+    device_token_pos: torch.Tensor,
+    topk_indices: torch.Tensor,
+    device_cache_row_indices: torch.Tensor,
+    slot_map_row_indices: torch.Tensor,
+    valid_topk_mask: torch.Tensor,
+    hit_sparse_indices: torch.Tensor,
+    miss_sparse_indices: torch.Tensor,
+    hit_counts: torch.Tensor,
+    miss_counts: torch.Tensor,
+    hit_src_indices: torch.Tensor,
+    miss_src_indices: torch.Tensor,
+    miss_hot_dst_indices: torch.Tensor,
+    hit_valid_mask: torch.Tensor,
+    miss_valid_mask: torch.Tensor,
+    slot_map_flat_indices: torch.Tensor,
+    slot_map_slot_values: torch.Tensor,
+    tile_hit_counts: torch.Tensor,
+    tile_miss_counts: torch.Tensor,
+    tile_hit_offsets: torch.Tensor,
+    tile_miss_offsets: torch.Tensor,
+    selected_slots: torch.Tensor,
+    max_context_len: int,
+    slot_map_width: int,
+    block_dim: int = 0,
+):
+    """Run the fixed-address three-kernel parallel partition planner.
+
+    Classification and stable scatter use 64-entry tiles across all AIVs. A
+    small request-level scan computes the 32 tile offsets and assigns misses to
+    the complement of resident hit slots. The public outputs are identical to
+    :func:`sparse_kv_partition_plan_inplace`; the additional tensors are graph-
+    stable workspaces owned by the caller.
+    """
+    torch.ops.npu.sparse_kv_partition_plan_parallel(
+        token_on_device,
+        device_token_pos,
+        topk_indices,
+        device_cache_row_indices,
+        slot_map_row_indices,
+        valid_topk_mask,
+        hit_sparse_indices,
+        miss_sparse_indices,
+        hit_counts,
+        miss_counts,
+        hit_src_indices,
+        miss_src_indices,
+        miss_hot_dst_indices,
+        hit_valid_mask,
+        miss_valid_mask,
+        slot_map_flat_indices,
+        slot_map_slot_values,
+        tile_hit_counts,
+        tile_miss_counts,
+        tile_hit_offsets,
+        tile_miss_offsets,
+        selected_slots,
+        max_context_len,
+        slot_map_width,
+        block_dim,
+    )
+    return (
+        hit_sparse_indices,
+        miss_sparse_indices,
+        hit_counts,
+        miss_counts,
+        hit_src_indices,
+        miss_src_indices,
+        miss_hot_dst_indices,
+        hit_valid_mask,
+        miss_valid_mask,
+        slot_map_flat_indices,
+        slot_map_slot_values,
+    )
+
+
+def sparse_kv_partition_plan_parallel(
+    token_on_device: torch.Tensor,
+    device_token_pos: torch.Tensor,
+    topk_indices: torch.Tensor,
+    device_cache_row_indices: torch.Tensor,
+    slot_map_row_indices: torch.Tensor,
+    valid_topk_mask: torch.Tensor,
+    max_context_len: int,
+    slot_map_width: int,
+    block_dim: int = 0,
+):
+    """Allocate outputs/workspaces and run the three-kernel planner."""
+    if token_on_device.dim() != 2:
+        raise ValueError(
+            "token_on_device must have shape [B, K], got "
+            f"{tuple(token_on_device.shape)}"
+        )
+    batch_size, topk = token_on_device.shape
+    if topk % 64 != 0:
+        raise ValueError(f"topk must be divisible by 64, got {topk}")
+    plan_size = batch_size * topk
+    tile_shape = (batch_size, topk // 64)
+    options = dict(device=token_on_device.device)
+    outputs = (
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+        torch.empty((batch_size,), dtype=torch.int32, **options),
+        torch.empty((batch_size,), dtype=torch.int32, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((plan_size,), dtype=torch.bool, **options),
+        torch.empty((plan_size,), dtype=torch.bool, **options),
+        torch.empty((plan_size,), dtype=torch.int64, **options),
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+    )
+    workspaces = (
+        torch.empty(tile_shape, dtype=torch.int32, **options),
+        torch.empty(tile_shape, dtype=torch.int32, **options),
+        torch.empty(tile_shape, dtype=torch.int32, **options),
+        torch.empty(tile_shape, dtype=torch.int32, **options),
+        torch.empty((batch_size, topk), dtype=torch.int32, **options),
+    )
+    return sparse_kv_partition_plan_parallel_inplace(
+        token_on_device,
+        device_token_pos,
+        topk_indices,
+        device_cache_row_indices,
+        slot_map_row_indices,
+        valid_topk_mask,
+        *outputs,
+        *workspaces,
+        max_context_len,
+        slot_map_width,
+        block_dim,
+    )
+
+
 def sfa_state_merge_inplace(
     hit_output: torch.Tensor,
     hit_max: torch.Tensor,

@@ -6,6 +6,8 @@ import torch_npu  # noqa: F401
 from sgl_kernel_npu.sparsity_driven_kv_offload import (
     sparse_kv_partition_plan,
     sparse_kv_partition_plan_inplace,
+    sparse_kv_partition_plan_parallel,
+    sparse_kv_partition_plan_parallel_inplace,
 )
 
 
@@ -156,6 +158,16 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
             torch.empty((batch_size, TOPK), dtype=torch.int32, device=device),
         )
 
+    def _empty_parallel_workspaces(self, batch_size, device="npu"):
+        tile_shape = (batch_size, TOPK // 64)
+        return (
+            torch.empty(tile_shape, dtype=torch.int32, device=device),
+            torch.empty(tile_shape, dtype=torch.int32, device=device),
+            torch.empty(tile_shape, dtype=torch.int32, device=device),
+            torch.empty(tile_shape, dtype=torch.int32, device=device),
+            torch.empty((batch_size, TOPK), dtype=torch.int32, device=device),
+        )
+
     def test_matches_reference_and_preserves_hit_slots(self):
         inputs = self._make_inputs()
         expected = reference_plan(*inputs)
@@ -176,6 +188,71 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                             f"shape={tuple(actual_tensor.shape)}, block_dim={block_dim}"
                         ),
                     )
+
+    def test_parallel_three_kernel_plan_matches_reference(self):
+        inputs = self._make_inputs()
+        expected = reference_plan(*inputs)
+        for block_dim in (0, 1, 2, 8):
+            with self.subTest(block_dim=block_dim):
+                actual = sparse_kv_partition_plan_parallel(
+                    *inputs,
+                    max_context_len=CONTEXT,
+                    slot_map_width=SLOT_MAP_WIDTH,
+                    block_dim=block_dim,
+                )
+                torch.npu.synchronize()
+                for actual_tensor, expected_tensor in zip(actual, expected):
+                    self.assertTrue(
+                        torch.equal(actual_tensor.cpu(), expected_tensor),
+                        msg=(
+                            "parallel planner mismatch for "
+                            f"dtype={actual_tensor.dtype}, "
+                            f"shape={tuple(actual_tensor.shape)}, "
+                            f"block_dim={block_dim}"
+                        ),
+                    )
+
+    def test_parallel_plan_compacts_across_all_32_tiles(self):
+        batch_size = 2
+        positions = torch.arange(TOPK, dtype=torch.int32)
+        topk = positions.unsqueeze(0).expand(batch_size, TOPK).clone()
+        valid = torch.ones((batch_size, TOPK), dtype=torch.bool)
+        valid[1, 1537:] = False
+        token_on_device = torch.zeros((batch_size, TOPK), dtype=torch.int32)
+        device_pos = torch.full((batch_size, TOPK), -1, dtype=torch.int32)
+
+        hit0 = positions.remainder(3) != 1
+        hit1 = (positions.remainder(5) == 0) & valid[1]
+        token_on_device[0, hit0] = 1
+        token_on_device[1, hit1] = 1
+        permuted_slots = positions.mul(37).remainder(TOPK)
+        device_pos[0, hit0] = permuted_slots[hit0]
+        device_pos[1, hit1] = permuted_slots.flip(0)[hit1]
+
+        inputs = tuple(
+            tensor.to("npu")
+            for tensor in (
+                token_on_device,
+                device_pos,
+                topk,
+                torch.tensor([3, 1], dtype=torch.int64),
+                torch.tensor([3, 1], dtype=torch.int64),
+                valid,
+            )
+        )
+        expected = reference_plan(*inputs)
+        actual = sparse_kv_partition_plan_parallel(
+            *inputs, max_context_len=CONTEXT, slot_map_width=SLOT_MAP_WIDTH,
+        )
+        torch.npu.synchronize()
+        for actual_tensor, expected_tensor in zip(actual, expected):
+            self.assertTrue(
+                torch.equal(actual_tensor.cpu(), expected_tensor),
+                msg=(
+                    "cross-tile mismatch for "
+                    f"dtype={actual_tensor.dtype}, shape={tuple(actual_tensor.shape)}"
+                ),
+            )
 
     def test_rejects_non_fixed_topk(self):
         batch = 1
@@ -257,6 +334,89 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                     self.assertTrue(
                         torch.equal(actual_tensor.cpu(), expected_tensor),
                         msg=f"NPUGraph mismatch for shape={tuple(actual_tensor.shape)}",
+                    )
+        finally:
+            torch.npu.synchronize()
+            if hasattr(graph, "reset"):
+                graph.reset()
+
+    def test_parallel_plan_npugraph_replay_reads_dynamic_inputs(self):
+        case_a = self._make_inputs()
+        case_b = tuple(tensor.clone() for tensor in case_a)
+        case_b[0][0].zero_()
+        case_b[1][0].fill_(-1)
+        case_b[2][0].fill_(-1)
+        case_b[5][0].zero_()
+        case_b[2][0, :12] = torch.arange(100, 112, dtype=torch.int32, device="npu")
+        case_b[5][0, :12] = True
+        case_b[0][0, 1] = 1
+        case_b[1][0, 1] = 200
+        case_b[0][0, 3] = 1
+        case_b[1][0, 3] = 7
+        case_b[5][2].zero_()
+
+        static_inputs = tuple(torch.empty_like(tensor) for tensor in case_a)
+        static_outputs = self._empty_outputs(case_a[0].size(0))
+        static_workspaces = self._empty_parallel_workspaces(case_a[0].size(0))
+        input_ptrs = tuple(tensor.data_ptr() for tensor in static_inputs)
+        output_ptrs = tuple(tensor.data_ptr() for tensor in static_outputs)
+        workspace_ptrs = tuple(tensor.data_ptr() for tensor in static_workspaces)
+
+        def load_case(case):
+            for static, value in zip(static_inputs, case):
+                static.copy_(value)
+
+        def run_once():
+            sparse_kv_partition_plan_parallel_inplace(
+                *static_inputs,
+                *static_outputs,
+                *static_workspaces,
+                CONTEXT,
+                SLOT_MAP_WIDTH,
+            )
+
+        load_case(case_a)
+        capture_stream = torch.npu.Stream()
+        capture_stream.wait_stream(torch.npu.current_stream())
+        with torch.npu.stream(capture_stream):
+            run_once()
+            run_once()
+        torch.npu.synchronize()
+
+        graph = torch.npu.NPUGraph()
+        pool = torch.npu.graph_pool_handle()
+        with torch.npu.graph(
+            graph, pool=pool, stream=capture_stream, auto_dispatch_capture=True,
+        ):
+            run_once()
+        torch.npu.synchronize()
+
+        try:
+            for case in (case_b, case_a):
+                expected = reference_plan(*case)
+                load_case(case)
+                for output in static_outputs:
+                    output.zero_()
+                torch.npu.synchronize()
+                graph.replay()
+                torch.npu.synchronize()
+                self.assertEqual(
+                    tuple(tensor.data_ptr() for tensor in static_inputs), input_ptrs
+                )
+                self.assertEqual(
+                    tuple(tensor.data_ptr() for tensor in static_outputs), output_ptrs
+                )
+                self.assertEqual(
+                    tuple(tensor.data_ptr() for tensor in static_workspaces),
+                    workspace_ptrs,
+                )
+                for actual_tensor, expected_tensor in zip(static_outputs, expected):
+                    self.assertTrue(
+                        torch.equal(actual_tensor.cpu(), expected_tensor),
+                        msg=(
+                            "parallel NPUGraph mismatch for "
+                            f"shape={tuple(actual_tensor.shape)}"
+                        ),
                     )
         finally:
             torch.npu.synchronize()

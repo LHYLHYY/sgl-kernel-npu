@@ -237,6 +237,28 @@ void sparse_kv_partition_plan(
     int64_t max_context_len, int64_t slot_map_width, int64_t block_dim);
 
 /**
+ * @brief Three-stage tile-parallel variant of sparse_kv_partition_plan.
+ *
+ * The four [B, 32] tile tensors and selected_slots [B, K] are caller-owned
+ * fixed-address workspaces so the three device kernels are NPUGraph safe.
+ */
+void sparse_kv_partition_plan_parallel(
+    const at::Tensor &token_on_device, const at::Tensor &device_token_pos,
+    const at::Tensor &topk_indices,
+    const at::Tensor &device_cache_row_indices,
+    const at::Tensor &slot_map_row_indices,
+    const at::Tensor &valid_topk_mask, at::Tensor &hit_sparse_indices,
+    at::Tensor &miss_sparse_indices, at::Tensor &hit_counts,
+    at::Tensor &miss_counts, at::Tensor &hit_src_indices,
+    at::Tensor &miss_src_indices, at::Tensor &miss_hot_dst_indices,
+    at::Tensor &hit_valid_mask, at::Tensor &miss_valid_mask,
+    at::Tensor &slot_map_flat_indices, at::Tensor &slot_map_slot_values,
+    at::Tensor &tile_hit_counts, at::Tensor &tile_miss_counts,
+    at::Tensor &tile_hit_offsets, at::Tensor &tile_miss_offsets,
+    at::Tensor &selected_slots, int64_t max_context_len,
+    int64_t slot_map_width, int64_t block_dim);
+
+/**
  * @brief Merge two sparse-flash-attention online-softmax states.
  *
  * Outputs use base-format BSND layout [B, S, H, D] with D a multiple of 16.
