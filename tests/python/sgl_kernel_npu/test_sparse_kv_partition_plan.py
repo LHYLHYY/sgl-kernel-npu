@@ -14,6 +14,19 @@ from sgl_kernel_npu.sparsity_driven_kv_offload import (
 TOPK = 2048
 CONTEXT = 4096
 SLOT_MAP_WIDTH = 4104
+PLAN_OUTPUT_NAMES = (
+    "hit_sparse_indices",
+    "miss_sparse_indices",
+    "hit_counts",
+    "miss_counts",
+    "hit_src_indices",
+    "miss_src_indices",
+    "miss_hot_dst_indices",
+    "hit_valid_mask",
+    "miss_valid_mask",
+    "slot_map_flat_indices",
+    "slot_map_slot_values",
+)
 
 
 def reference_plan(
@@ -109,6 +122,22 @@ def reference_plan(
 
 
 class TestSparseKvPartitionPlan(unittest.TestCase):
+    def _assert_plan_equal(self, actual, expected, context):
+        for name, actual_tensor, expected_tensor in zip(
+            PLAN_OUTPUT_NAMES, actual, expected
+        ):
+            actual_cpu = actual_tensor.cpu()
+            if torch.equal(actual_cpu, expected_tensor):
+                continue
+            mismatch = actual_cpu.reshape(-1) != expected_tensor.reshape(-1)
+            first_index = int(torch.nonzero(mismatch, as_tuple=False)[0])
+            self.fail(
+                f"{context}: output={name}, dtype={actual_tensor.dtype}, "
+                f"shape={tuple(actual_tensor.shape)}, first_flat_index={first_index}, "
+                f"actual={actual_cpu.reshape(-1)[first_index].item()}, "
+                f"expected={expected_tensor.reshape(-1)[first_index].item()}"
+            )
+
     def _make_inputs(self):
         batch_size = 4
         topk = torch.full((batch_size, TOPK), -1, dtype=torch.int32)
@@ -180,14 +209,9 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                     block_dim=block_dim,
                 )
                 torch.npu.synchronize()
-                for actual_tensor, expected_tensor in zip(actual, expected):
-                    self.assertTrue(
-                        torch.equal(actual_tensor.cpu(), expected_tensor),
-                        msg=(
-                            f"mismatch for dtype={actual_tensor.dtype}, "
-                            f"shape={tuple(actual_tensor.shape)}, block_dim={block_dim}"
-                        ),
-                    )
+                self._assert_plan_equal(
+                    actual, expected, f"single planner block_dim={block_dim}"
+                )
 
     def test_parallel_three_kernel_plan_matches_reference(self):
         inputs = self._make_inputs()
@@ -201,16 +225,9 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                     block_dim=block_dim,
                 )
                 torch.npu.synchronize()
-                for actual_tensor, expected_tensor in zip(actual, expected):
-                    self.assertTrue(
-                        torch.equal(actual_tensor.cpu(), expected_tensor),
-                        msg=(
-                            "parallel planner mismatch for "
-                            f"dtype={actual_tensor.dtype}, "
-                            f"shape={tuple(actual_tensor.shape)}, "
-                            f"block_dim={block_dim}"
-                        ),
-                    )
+                self._assert_plan_equal(
+                    actual, expected, f"parallel planner block_dim={block_dim}"
+                )
 
     def test_parallel_plan_compacts_across_all_32_tiles(self):
         batch_size = 2
@@ -245,14 +262,7 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
             *inputs, max_context_len=CONTEXT, slot_map_width=SLOT_MAP_WIDTH,
         )
         torch.npu.synchronize()
-        for actual_tensor, expected_tensor in zip(actual, expected):
-            self.assertTrue(
-                torch.equal(actual_tensor.cpu(), expected_tensor),
-                msg=(
-                    "cross-tile mismatch for "
-                    f"dtype={actual_tensor.dtype}, shape={tuple(actual_tensor.shape)}"
-                ),
-            )
+        self._assert_plan_equal(actual, expected, "parallel cross-tile planner")
 
     def test_rejects_non_fixed_topk(self):
         batch = 1
@@ -330,11 +340,9 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                 self.assertEqual(
                     tuple(tensor.data_ptr() for tensor in static_outputs), output_ptrs
                 )
-                for actual_tensor, expected_tensor in zip(static_outputs, expected):
-                    self.assertTrue(
-                        torch.equal(actual_tensor.cpu(), expected_tensor),
-                        msg=f"NPUGraph mismatch for shape={tuple(actual_tensor.shape)}",
-                    )
+                self._assert_plan_equal(
+                    static_outputs, expected, "single planner NPUGraph replay"
+                )
         finally:
             torch.npu.synchronize()
             if hasattr(graph, "reset"):
@@ -410,14 +418,9 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                     tuple(tensor.data_ptr() for tensor in static_workspaces),
                     workspace_ptrs,
                 )
-                for actual_tensor, expected_tensor in zip(static_outputs, expected):
-                    self.assertTrue(
-                        torch.equal(actual_tensor.cpu(), expected_tensor),
-                        msg=(
-                            "parallel NPUGraph mismatch for "
-                            f"shape={tuple(actual_tensor.shape)}"
-                        ),
-                    )
+                self._assert_plan_equal(
+                    static_outputs, expected, "parallel planner NPUGraph replay"
+                )
         finally:
             torch.npu.synchronize()
             if hasattr(graph, "reset"):

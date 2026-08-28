@@ -44,6 +44,10 @@ public:
         pipe->InitBuffer(maskBuf, 2U * FIXED_TOPK * sizeof(uint8_t));
         pipe->InitBuffer(int32Buf, 2U * FIXED_TOPK * sizeof(int32_t));
         pipe->InitBuffer(int64Buf, FIXED_TOPK * sizeof(int64_t));
+        // Four 32-entry tile rows plus scalar staging. All metadata crosses
+        // kernel boundaries through MTE, not GlobalTensor scalar DCache.
+        pipe->InitBuffer(tileMetaBuf, 5U * TILES_PER_BATCH * sizeof(int32_t));
+        pipe->InitBuffer(rowMetaBuf, 4U * sizeof(int64_t));
     }
 
     __aicore__ inline void Process()
@@ -58,25 +62,58 @@ public:
         AscendC::LocalTensor<int32_t> selectedSlots = int32Base;
         AscendC::LocalTensor<int32_t> slotMapValues = int32Base[FIXED_TOPK];
         AscendC::LocalTensor<int64_t> missHotDst = int64Buf.Get<int64_t>();
+        AscendC::LocalTensor<int32_t> tileMeta = tileMetaBuf.Get<int32_t>();
+        AscendC::LocalTensor<int32_t> tileHitCounts = tileMeta;
+        AscendC::LocalTensor<int32_t> tileMissCounts = tileMeta[TILES_PER_BATCH];
+        AscendC::LocalTensor<int32_t> tileHitOffsets = tileMeta[2U * TILES_PER_BATCH];
+        AscendC::LocalTensor<int32_t> tileMissOffsets = tileMeta[3U * TILES_PER_BATCH];
+        AscendC::LocalTensor<int32_t> scalarMeta = tileMeta[4U * TILES_PER_BATCH];
+        AscendC::LocalTensor<int64_t> rowMeta = rowMetaBuf.Get<int64_t>();
 
         for (uint32_t batch = workerIndex; batch < batchSize; batch += workerCount) {
             const uint32_t rowOffset = batch * topk;
             const uint32_t tileOffset = batch * TILES_PER_BATCH;
+            AscendC::DataCopy(tileHitCounts, tileHitCountsGm[tileOffset],
+                              TILES_PER_BATCH);
+            AscendC::DataCopy(tileMissCounts, tileMissCountsGm[tileOffset],
+                              TILES_PER_BATCH);
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_S>(0);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_S>(0);
+
             uint32_t hitTotal = 0;
             uint32_t missTotal = 0;
             for (uint32_t tile = 0; tile < TILES_PER_BATCH; ++tile) {
-                tileHitOffsetsGm.SetValue(tileOffset + tile, static_cast<int32_t>(hitTotal));
-                tileMissOffsetsGm.SetValue(tileOffset + tile, static_cast<int32_t>(missTotal));
-                hitTotal += static_cast<uint32_t>(tileHitCountsGm.GetValue(tileOffset + tile));
-                missTotal += static_cast<uint32_t>(tileMissCountsGm.GetValue(tileOffset + tile));
+                tileHitOffsets.SetValue(tile, static_cast<int32_t>(hitTotal));
+                tileMissOffsets.SetValue(tile, static_cast<int32_t>(missTotal));
+                hitTotal += static_cast<uint32_t>(tileHitCounts.GetValue(tile));
+                missTotal += static_cast<uint32_t>(tileMissCounts.GetValue(tile));
             }
-            hitCountsGm.SetValue(batch, static_cast<int32_t>(hitTotal));
-            missCountsGm.SetValue(batch, static_cast<int32_t>(missTotal));
+            scalarMeta.SetValue(0, static_cast<int32_t>(hitTotal));
+            scalarMeta.SetValue(8, static_cast<int32_t>(missTotal));
+            scalarMeta.SetValue(16, 0);
+
+            AscendC::SetFlag<AscendC::HardEvent::S_MTE3>(0);
+            AscendC::WaitFlag<AscendC::HardEvent::S_MTE3>(0);
+            AscendC::DataCopy(tileHitOffsetsGm[tileOffset], tileHitOffsets,
+                              TILES_PER_BATCH);
+            AscendC::DataCopy(tileMissOffsetsGm[tileOffset], tileMissOffsets,
+                              TILES_PER_BATCH);
+            AscendC::DataCopyExtParams scalarCopyParams{
+                1, static_cast<uint32_t>(sizeof(int32_t)), 0, 0, 0};
+            AscendC::DataCopyPad(hitCountsGm[batch], scalarMeta, scalarCopyParams);
+            AscendC::DataCopyPad(missCountsGm[batch], scalarMeta[8],
+                                 scalarCopyParams);
             if (hitTotal == 0) {
-                hitSparseIndicesGm.SetValue(rowOffset, 0);
+                AscendC::DataCopyPad(hitSparseIndicesGm[rowOffset], scalarMeta[16],
+                                     scalarCopyParams);
             }
             if (missTotal == 0) {
-                missSparseIndicesGm.SetValue(rowOffset, 0);
+                AscendC::DataCopyPad(missSparseIndicesGm[rowOffset], scalarMeta[16],
+                                     scalarCopyParams);
+            }
+            AscendC::SetFlag<AscendC::HardEvent::MTE3_S>(0);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE3_S>(0);
+            if (missTotal == 0) {
                 continue;
             }
 
@@ -85,6 +122,11 @@ public:
             AscendC::DataCopy(selectedSlots, selectedSlotsGm[rowOffset], topk);
             AscendC::DataCopy(slotMapValues, slotMapSlotValuesGm[rowOffset], topk);
             AscendC::DataCopy(missHotDst, missHotDstIndicesGm[rowOffset], topk);
+            AscendC::DataCopyExtParams rowCopyParams{
+                1, static_cast<uint32_t>(sizeof(int64_t)), 0, 0, 0};
+            AscendC::DataCopyPadExtParams<int64_t> rowPadParams{false, 0, 0, 0};
+            AscendC::DataCopyPad(rowMeta, deviceCacheRowIndicesGm[batch],
+                                 rowCopyParams, rowPadParams);
             AscendC::SetFlag<AscendC::HardEvent::MTE2_S>(0);
             AscendC::WaitFlag<AscendC::HardEvent::MTE2_S>(0);
             AscendC::Duplicate(occupied, static_cast<uint32_t>(0), SLOT_BITMAP_WORDS);
@@ -104,7 +146,7 @@ public:
                 }
             }
 
-            const int64_t cacheBase = deviceCacheRowIndicesGm.GetValue(batch) *
+            const int64_t cacheBase = rowMeta.GetValue(0) *
                                       static_cast<int64_t>(topk);
             uint32_t nextFreeSlot = 0;
             for (uint32_t position = 0; position < topk; ++position) {
@@ -163,6 +205,8 @@ private:
     AscendC::TBuf<AscendC::QuePosition::VECCALC> maskBuf;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> int32Buf;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> int64Buf;
+    AscendC::TBuf<AscendC::QuePosition::VECCALC> tileMetaBuf;
+    AscendC::TBuf<AscendC::QuePosition::VECCALC> rowMetaBuf;
     uint32_t batchSize = 0;
     uint32_t topk = 0;
 };

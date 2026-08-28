@@ -51,6 +51,11 @@ public:
         pipe->InitBuffer(int32Buf, 7U * FIXED_TOPK * sizeof(int32_t));
         pipe->InitBuffer(maskBuf, 3U * FIXED_TOPK * sizeof(uint8_t));
         pipe->InitBuffer(int64Buf, 4U * FIXED_TOPK * sizeof(int64_t));
+        // GlobalTensor::SetValue writes through the per-core DCache. Adjacent
+        // batch counters therefore cannot be safely published by different
+        // AIVs. Keep scalar metadata in UB and use exact MTE copies instead.
+        pipe->InitBuffer(rowMetaBuf, 8U * sizeof(int64_t));
+        pipe->InitBuffer(countBuf, 16U * sizeof(int32_t));
     }
 
     __aicore__ inline void Process()
@@ -77,12 +82,14 @@ public:
         AscendC::LocalTensor<int64_t> missSrc = int64Base[FIXED_TOPK];
         AscendC::LocalTensor<int64_t> missHotDst = int64Base[2U * FIXED_TOPK];
         AscendC::LocalTensor<int64_t> slotMapFlat = int64Base[3U * FIXED_TOPK];
+        AscendC::LocalTensor<int64_t> rowMeta = rowMetaBuf.Get<int64_t>();
+        AscendC::LocalTensor<int32_t> counts = countBuf.Get<int32_t>();
 
         for (uint32_t batch = workerIndex; batch < batchSize; batch += workerCount) {
             BuildOneBatch(batch, tokenOnDevice, deviceTokenPos, topkIndices,
                           occupied, hitSparse, missSparse, slotMapValues,
                           validTopk, hitValid, missValid, hitSrc, missSrc,
-                          missHotDst, slotMapFlat);
+                          missHotDst, slotMapFlat, rowMeta, counts);
         }
     }
 
@@ -101,13 +108,22 @@ private:
         AscendC::LocalTensor<int64_t> hitSrc,
         AscendC::LocalTensor<int64_t> missSrc,
         AscendC::LocalTensor<int64_t> missHotDst,
-        AscendC::LocalTensor<int64_t> slotMapFlat)
+        AscendC::LocalTensor<int64_t> slotMapFlat,
+        AscendC::LocalTensor<int64_t> rowMeta,
+        AscendC::LocalTensor<int32_t> counts)
     {
         const uint32_t rowOffset = batch * topk;
         AscendC::DataCopy(tokenOnDevice, tokenOnDeviceGm[rowOffset], topk);
         AscendC::DataCopy(deviceTokenPos, deviceTokenPosGm[rowOffset], topk);
         AscendC::DataCopy(topkIndices, topkIndicesGm[rowOffset], topk);
         AscendC::DataCopy(validTopk, validTopkMaskGm[rowOffset], topk);
+        AscendC::DataCopyExtParams rowCopyParams{
+            1, static_cast<uint32_t>(sizeof(int64_t)), 0, 0, 0};
+        AscendC::DataCopyPadExtParams<int64_t> rowPadParams{false, 0, 0, 0};
+        AscendC::DataCopyPad(rowMeta, deviceCacheRowIndicesGm[batch],
+                             rowCopyParams, rowPadParams);
+        AscendC::DataCopyPad(rowMeta[4], slotMapRowIndicesGm[batch],
+                             rowCopyParams, rowPadParams);
         AscendC::SetFlag<AscendC::HardEvent::MTE2_S>(0);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_S>(0);
 
@@ -118,8 +134,8 @@ private:
         AscendC::SetFlag<AscendC::HardEvent::V_S>(0);
         AscendC::WaitFlag<AscendC::HardEvent::V_S>(0);
 
-        const int64_t cacheRow = deviceCacheRowIndicesGm.GetValue(batch);
-        const int64_t slotMapRow = slotMapRowIndicesGm.GetValue(batch);
+        const int64_t cacheRow = rowMeta.GetValue(0);
+        const int64_t slotMapRow = rowMeta.GetValue(4);
         const int64_t cacheBase = cacheRow * static_cast<int64_t>(topk);
         const int64_t hostBase = cacheRow * static_cast<int64_t>(maxContextLen);
         const int64_t slotMapBase = slotMapRow * static_cast<int64_t>(slotMapWidth);
@@ -167,8 +183,8 @@ private:
         if (missCount == 0) {
             missSparse.SetValue(0, 0);
         }
-        hitCountsGm.SetValue(batch, static_cast<int32_t>(hitCount));
-        missCountsGm.SetValue(batch, static_cast<int32_t>(missCount));
+        counts.SetValue(0, static_cast<int32_t>(hitCount));
+        counts.SetValue(8, static_cast<int32_t>(missCount));
 
         // Preserve hit slots. Assign misses, in Top-K order, to the ascending
         // complement of those occupied slots. This is deterministic across
@@ -199,6 +215,10 @@ private:
 
         AscendC::SetFlag<AscendC::HardEvent::S_MTE3>(0);
         AscendC::WaitFlag<AscendC::HardEvent::S_MTE3>(0);
+        AscendC::DataCopyExtParams countCopyParams{
+            1, static_cast<uint32_t>(sizeof(int32_t)), 0, 0, 0};
+        AscendC::DataCopyPad(hitCountsGm[batch], counts, countCopyParams);
+        AscendC::DataCopyPad(missCountsGm[batch], counts[8], countCopyParams);
         AscendC::DataCopy(hitSparseIndicesGm[rowOffset], hitSparse, topk);
         AscendC::DataCopy(missSparseIndicesGm[rowOffset], missSparse, topk);
         AscendC::DataCopy(hitSrcIndicesGm[rowOffset], hitSrc, topk);
@@ -232,6 +252,8 @@ private:
     AscendC::TBuf<AscendC::QuePosition::VECCALC> int32Buf;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> maskBuf;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> int64Buf;
+    AscendC::TBuf<AscendC::QuePosition::VECCALC> rowMetaBuf;
+    AscendC::TBuf<AscendC::QuePosition::VECCALC> countBuf;
     uint32_t batchSize = 0;
     uint32_t topk = 0;
     uint32_t maxContextLen = 0;

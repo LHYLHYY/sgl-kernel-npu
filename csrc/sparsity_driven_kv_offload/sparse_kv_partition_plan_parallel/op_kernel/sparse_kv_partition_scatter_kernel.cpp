@@ -34,6 +34,7 @@ public:
         missSparseIndicesGm.SetGlobalBuffer((__gm__ int32_t *)missSparseIndices, planSize);
         pipe->InitBuffer(maskBuf, 2U * TOPK_TILE_LEN * sizeof(uint8_t));
         pipe->InitBuffer(indexBuf, 2U * TOPK_TILE_LEN * sizeof(int32_t));
+        pipe->InitBuffer(metaBuf, 32U * sizeof(int32_t));
     }
 
     __aicore__ inline void Process()
@@ -47,6 +48,7 @@ public:
         AscendC::LocalTensor<int32_t> indexBase = indexBuf.Get<int32_t>();
         AscendC::LocalTensor<int32_t> hitLocal = indexBase;
         AscendC::LocalTensor<int32_t> missLocal = indexBase[TOPK_TILE_LEN];
+        AscendC::LocalTensor<int32_t> meta = metaBuf.Get<int32_t>();
 
         for (uint32_t task = workerIndex; task < taskCount; task += workerCount) {
             const uint32_t batch = task / TILES_PER_BATCH;
@@ -56,6 +58,17 @@ public:
             const uint32_t gmOffset = rowOffset + tileBegin;
             AscendC::DataCopy(hitValid, hitValidMaskGm[gmOffset], TOPK_TILE_LEN);
             AscendC::DataCopy(missValid, missValidMaskGm[gmOffset], TOPK_TILE_LEN);
+            AscendC::DataCopyExtParams scalarCopyParams{
+                1, static_cast<uint32_t>(sizeof(int32_t)), 0, 0, 0};
+            AscendC::DataCopyPadExtParams<int32_t> scalarPadParams{false, 0, 0, 0};
+            AscendC::DataCopyPad(meta, tileHitCountsGm[task], scalarCopyParams,
+                                 scalarPadParams);
+            AscendC::DataCopyPad(meta[8], tileMissCountsGm[task], scalarCopyParams,
+                                 scalarPadParams);
+            AscendC::DataCopyPad(meta[16], tileHitOffsetsGm[task], scalarCopyParams,
+                                 scalarPadParams);
+            AscendC::DataCopyPad(meta[24], tileMissOffsetsGm[task], scalarCopyParams,
+                                 scalarPadParams);
             AscendC::SetFlag<AscendC::HardEvent::MTE2_S>(0);
             AscendC::WaitFlag<AscendC::HardEvent::MTE2_S>(0);
 
@@ -70,10 +83,10 @@ public:
                 }
             }
 
-            const uint32_t expectedHit = static_cast<uint32_t>(tileHitCountsGm.GetValue(task));
-            const uint32_t expectedMiss = static_cast<uint32_t>(tileMissCountsGm.GetValue(task));
-            const uint32_t hitOffset = static_cast<uint32_t>(tileHitOffsetsGm.GetValue(task));
-            const uint32_t missOffset = static_cast<uint32_t>(tileMissOffsetsGm.GetValue(task));
+            const uint32_t expectedHit = static_cast<uint32_t>(meta.GetValue(0));
+            const uint32_t expectedMiss = static_cast<uint32_t>(meta.GetValue(8));
+            const uint32_t hitOffset = static_cast<uint32_t>(meta.GetValue(16));
+            const uint32_t missOffset = static_cast<uint32_t>(meta.GetValue(24));
             AscendC::SetFlag<AscendC::HardEvent::S_MTE3>(0);
             AscendC::WaitFlag<AscendC::HardEvent::S_MTE3>(0);
             if (expectedHit > 0) {
@@ -104,6 +117,7 @@ private:
     AscendC::GlobalTensor<int32_t> missSparseIndicesGm;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> maskBuf;
     AscendC::TBuf<AscendC::QuePosition::VECCALC> indexBuf;
+    AscendC::TBuf<AscendC::QuePosition::VECCALC> metaBuf;
     uint32_t batchSize = 0;
     uint32_t topk = 0;
 };
