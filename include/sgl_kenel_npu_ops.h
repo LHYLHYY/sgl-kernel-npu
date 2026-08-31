@@ -258,7 +258,8 @@ void sparse_kv_partition_plan_parallel(
     at::Tensor &selected_slots, at::Tensor &tile_occupied_bitmaps,
     at::Tensor &occupied_bitmaps, at::Tensor &free_slot_prefixes,
     int64_t max_context_len,
-    int64_t slot_map_width, int64_t block_dim);
+    int64_t slot_map_width, int64_t block_dim,
+    bool output_physical_slots);
 
 /**
  * @brief Merge two sparse-flash-attention online-softmax states.

@@ -195,7 +195,8 @@ TORCH_LIBRARY_FRAGMENT(npu, m)
         "Tensor(o!) tile_miss_offsets, Tensor(p!) selected_slots, "
         "Tensor(q!) tile_occupied_bitmaps, Tensor(r!) occupied_bitmaps, "
         "Tensor(s!) free_slot_prefixes, "
-        "int max_context_len, int slot_map_width, int block_dim=0) -> ()");
+        "int max_context_len, int slot_map_width, int block_dim=0, "
+        "bool output_physical_slots=False) -> ()");
 
     m.def(
         "sfa_state_merge(Tensor hit_output, Tensor hit_max, Tensor hit_sum, "

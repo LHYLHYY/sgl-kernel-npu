@@ -66,7 +66,8 @@ HOST_API void sparse_kv_partition_plan_parallel(
     at::Tensor &selected_slots, at::Tensor &tile_occupied_bitmaps,
     at::Tensor &occupied_bitmaps, at::Tensor &free_slot_prefixes,
     int64_t max_context_len,
-    int64_t slot_map_width, int64_t block_dim)
+    int64_t slot_map_width, int64_t block_dim,
+    bool output_physical_slots)
 {
     CheckNpuTensor(token_on_device, "token_on_device");
     TORCH_CHECK(token_on_device.dim() == 2,
@@ -211,7 +212,8 @@ HOST_API void sparse_kv_partition_plan_parallel(
         tile_hit_offsets,
         tile_miss_offsets, selected_slots, occupied_bitmaps,
         free_slot_prefixes, hit_sparse_indices, miss_sparse_indices,
-        miss_hot_dst_indices, slot_map_slot_values, batchSize, topk);
+        miss_hot_dst_indices, slot_map_slot_values, batchSize, topk,
+        static_cast<uint32_t>(output_physical_slots));
 }
 
 }  // namespace npu_kernel

@@ -121,6 +121,37 @@ def reference_plan(
     )
 
 
+def reference_plan_with_physical_sparse_indices(*inputs):
+    outputs = list(reference_plan(*inputs))
+    hit_positions, miss_positions = outputs[:2]
+    hit_counts, miss_counts = outputs[2:4]
+    slot_values = outputs[-1]
+    hit_slots = torch.full_like(hit_positions, -1)
+    miss_slots = torch.full_like(miss_positions, -1)
+
+    for batch in range(hit_positions.size(0)):
+        hit_count = int(hit_counts[batch])
+        miss_count = int(miss_counts[batch])
+        if hit_count > 0:
+            positions = hit_positions[batch, :hit_count].to(torch.long)
+            hit_slots[batch, :hit_count] = slot_values[batch].index_select(
+                0, positions
+            )
+        else:
+            hit_slots[batch, 0] = 0
+        if miss_count > 0:
+            positions = miss_positions[batch, :miss_count].to(torch.long)
+            miss_slots[batch, :miss_count] = slot_values[batch].index_select(
+                0, positions
+            )
+        else:
+            miss_slots[batch, 0] = 0
+
+    outputs[0] = hit_slots
+    outputs[1] = miss_slots
+    return tuple(outputs)
+
+
 class TestSparseKvPartitionPlan(unittest.TestCase):
     def _assert_plan_equal(self, actual, expected, context):
         for name, actual_tensor, expected_tensor in zip(
@@ -236,6 +267,18 @@ class TestSparseKvPartitionPlan(unittest.TestCase):
                 self._assert_plan_equal(
                     actual, expected, f"parallel planner block_dim={block_dim}"
                 )
+
+    def test_parallel_plan_can_emit_compact_physical_slots(self):
+        inputs = self._make_inputs()
+        expected = reference_plan_with_physical_sparse_indices(*inputs)
+        actual = sparse_kv_partition_plan_parallel(
+            *inputs,
+            max_context_len=CONTEXT,
+            slot_map_width=SLOT_MAP_WIDTH,
+            output_physical_slots=True,
+        )
+        torch.npu.synchronize()
+        self._assert_plan_equal(actual, expected, "parallel physical-slot planner")
 
     def test_parallel_plan_compacts_across_all_32_tiles(self):
         batch_size = 2

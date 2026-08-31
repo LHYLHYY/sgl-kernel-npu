@@ -22,10 +22,12 @@ public:
         GM_ADDR occupiedBitmaps, GM_ADDR freeSlotPrefixes,
         GM_ADDR hitSparseIndices, GM_ADDR missSparseIndices,
         GM_ADDR missHotDstIndices, GM_ADDR slotMapSlotValues,
-        uint32_t batchSize, uint32_t topk, AscendC::TPipe *pipe)
+        uint32_t batchSize, uint32_t topk,
+        uint32_t outputPhysicalSlots, AscendC::TPipe *pipe)
     {
         this->batchSize = batchSize;
         this->topk = topk;
+        this->outputPhysicalSlots = outputPhysicalSlots;
         const uint64_t planSize = static_cast<uint64_t>(batchSize) * topk;
         const uint64_t tileSize =
             static_cast<uint64_t>(batchSize) * TILES_PER_BATCH;
@@ -177,13 +179,19 @@ public:
 
                 if (hit) {
                     hitLocal.SetValue(localHit++,
-                                      static_cast<int32_t>(tileBegin + i));
+                                      outputPhysicalSlots != 0U
+                                          ? selectedSlot
+                                          : static_cast<int32_t>(tileBegin + i));
                 }
                 if (!miss) {
                     continue;
                 }
-                missLocal.SetValue(localMiss++,
-                                   static_cast<int32_t>(tileBegin + i));
+                const uint32_t missLocalOffset = localMiss++;
+                missLocal.SetValue(
+                    missLocalOffset,
+                    outputPhysicalSlots != 0U
+                        ? 0
+                        : static_cast<int32_t>(tileBegin + i));
                 while (freeBits == 0U &&
                        freeWord + 1U < SLOT_BITMAP_WORDS) {
                     ++freeWord;
@@ -199,6 +207,10 @@ public:
                     i, cacheBase + static_cast<int64_t>(assignedSlot));
                 slotMapValues.SetValue(
                     i, static_cast<int32_t>(assignedSlot));
+                if (outputPhysicalSlots != 0U) {
+                    missLocal.SetValue(
+                        missLocalOffset, static_cast<int32_t>(assignedSlot));
+                }
             }
 
             AscendC::SetFlag<AscendC::HardEvent::S_MTE3>(0);
@@ -252,6 +264,7 @@ private:
     AscendC::TBuf<AscendC::QuePosition::VECCALC> rowMetaBuf;
     uint32_t batchSize = 0;
     uint32_t topk = 0;
+    uint32_t outputPhysicalSlots = 0;
 };
 
 extern "C" __global__ __aicore__ void sparse_kv_partition_scatter(
@@ -261,7 +274,8 @@ extern "C" __global__ __aicore__ void sparse_kv_partition_scatter(
     GM_ADDR occupied_bitmaps, GM_ADDR free_slot_prefixes,
     GM_ADDR hit_sparse_indices, GM_ADDR miss_sparse_indices,
     GM_ADDR miss_hot_dst_indices, GM_ADDR slot_map_slot_values,
-    uint32_t batch_size, uint32_t topk)
+    uint32_t batch_size, uint32_t topk,
+    uint32_t output_physical_slots)
 {
     KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);
     AscendC::TPipe pipe;
@@ -271,6 +285,7 @@ extern "C" __global__ __aicore__ void sparse_kv_partition_scatter(
                 tile_miss_offsets, selected_slots, occupied_bitmaps,
                 free_slot_prefixes, hit_sparse_indices,
                 miss_sparse_indices, miss_hot_dst_indices,
-                slot_map_slot_values, batch_size, topk, &pipe);
+                slot_map_slot_values, batch_size, topk,
+                output_physical_slots, &pipe);
     kernel.Process();
 }

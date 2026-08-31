@@ -431,6 +431,7 @@ def sparse_kv_partition_plan_parallel_inplace(
     max_context_len: int,
     slot_map_width: int,
     block_dim: int = 0,
+    output_physical_slots: bool = False,
 ):
     """Run the fixed-address three-kernel parallel partition planner.
 
@@ -438,7 +439,9 @@ def sparse_kv_partition_plan_parallel_inplace(
     small request-level scan computes tile offsets and reduces resident-slot
     bitmaps; stable scatter assigns misses to free slots in parallel. The public
     outputs are identical to :func:`sparse_kv_partition_plan_inplace`; the
-    additional tensors are graph-stable workspaces owned by the caller.
+    additional tensors are graph-stable workspaces owned by the caller. When
+    ``output_physical_slots`` is true, the two compact sparse-index outputs
+    contain request-local hot-cache slots instead of original Top-K positions.
     """
     torch.ops.npu.sparse_kv_partition_plan_parallel(
         token_on_device,
@@ -469,6 +472,7 @@ def sparse_kv_partition_plan_parallel_inplace(
         max_context_len,
         slot_map_width,
         block_dim,
+        output_physical_slots,
     )
     return (
         hit_sparse_indices,
@@ -495,6 +499,7 @@ def sparse_kv_partition_plan_parallel(
     max_context_len: int,
     slot_map_width: int,
     block_dim: int = 0,
+    output_physical_slots: bool = False,
 ):
     """Allocate outputs/workspaces and run the three-kernel planner."""
     if token_on_device.dim() != 2:
@@ -545,6 +550,7 @@ def sparse_kv_partition_plan_parallel(
         max_context_len,
         slot_map_width,
         block_dim,
+        output_physical_slots,
     )
 
 
