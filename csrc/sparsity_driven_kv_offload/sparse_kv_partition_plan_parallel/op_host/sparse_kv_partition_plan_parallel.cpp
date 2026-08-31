@@ -191,6 +191,7 @@ HOST_API void sparse_kv_partition_plan_parallel(
     const uint32_t topk = static_cast<uint32_t>(topk64);
     const uint32_t maxContextLen = static_cast<uint32_t>(max_context_len);
     const uint32_t slotMapWidth = static_cast<uint32_t>(slot_map_width);
+    const uint32_t outputPhysicalSlots = static_cast<uint32_t>(output_physical_slots);
     EXEC_KERNEL_CMD(
         sparse_kv_partition_classify, tileBlockDim, token_on_device,
         device_token_pos, topk_indices, device_cache_row_indices,
@@ -213,7 +214,7 @@ HOST_API void sparse_kv_partition_plan_parallel(
         tile_miss_offsets, selected_slots, occupied_bitmaps,
         free_slot_prefixes, hit_sparse_indices, miss_sparse_indices,
         miss_hot_dst_indices, slot_map_slot_values, batchSize, topk,
-        static_cast<uint32_t>(output_physical_slots));
+        outputPhysicalSlots);
 }
 
 }  // namespace npu_kernel
